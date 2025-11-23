@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Bugkiller TD</title>
+    <style>* { padding: 0; margin: 0; } canvas { background: #eee; display: block; margin: 0 auto; }</style>
+</head>
+<body>
+
+<canvas id="myCanvas" width="680" height="420"></canvas>
+
+<script>
+	"use strict";
+    //FIXED bug when first base dies: old bugs are fine, new bugs freak out
+	//BUG if you place a turret before the first well
+	
+	var canvas = document.getElementById("myCanvas");
+    var ctx = canvas.getContext("2d");
+	canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    var bugRadius = 7;
+	var bulletRadius = 2;
+	var wellWidth = 20;
+    var bugSpeed = 4;
+    var bulletSpeed = 12;
+    //var x = canvas.width/2;
+    //var y = canvas.height-30;
+    //var dx = 2;
+    //var dy = -2;
+    //var rightPressed = false;
+    //var leftPressed = false;
+    var maxScore = 1000;
+    var turretWidth = 15;
+    var railWidth = 5;
+	var fireLoops = 2;
+	var minBugGen = 1;				//bugs will never come more than every __ frames
+	var initBugGen = 10;			//at game start, bugs come every __ frames
+	var stepBugGen = 1100;			//bug frequency increases every __ frames
+	
+	var nearBuildingX = 0;
+	var nearBuildingY = 0;
+	var nearDist =0;
+	
+	var deadBugBuffer = 500;
+	var turretCost = 300;
+	var wellHealth = 100;
+	var turretRange = 160;
+	var turretReloadTime = 5;
+	var deathPushParam = 3;
+	//var wellPullParam = 50;
+	var minPullPushRatio = 1.03;
+	var ovr1Range = 200;
+	var wellPullLinearMod = .001;
+	
+	var pathCalcStep = 5;  // bugs re-evaluate path every __ frames
+	var oilPrice = 0.00009;
+	var pipeCost = 1;
+	var turretGranularity = 5;
+	var turretSeekAggro = 1.8; // other spot on rail must be __x better to move turret
+	var turretSpeed = 6;
+	
+	var wellSeekAggro = .8;
+	
+	var wellRadius = 30;
+	var wellCost = 1000;
+	var oilFieldRadius = 10;
+	var minOilFieldRadius = 10;
+	var maxOilFieldRadius = 10;
+	var oilFieldsCount = 300;
+	var oilClusterFactor = 33;
+	
+	var pipes = [];
+	var elbowRoom = 0;
+	var minDistance = 50;
+	
+	var terrain = [];
+	var terrainRes = 10;
+	var terrainX=0;
+	var terrainY=0;
+	var trendStrength = .25;
+	var maxE = 2;
+	var oilFields = [];
+	
+    var score = 0;
+	var bugs = [];
+	var minLiveBug = 0;
+	var bugTotalCount = 0;
+	var bugLiveCount = 0;
+	var bugGenCount = 0;
+	var bugGenTimer = 0;
+	var bugsOn = false;
+	var bullets = [];
+	var bulletCount = 0;
+	var wells = [];
+	var turrets = [];
+	var turretCount = 0;
+	
+	var frameCounter = 0;
+	var timr = [0,0,0,0,0,0,0,0,0,0];
+	var money = 0;
+	var oil = 0;
+	var proposedCost = 0;
+	var currentPos = [];
+	var minLiveBullet = 0;
+	var kShift = false;
+	var tPlace = false;
+	var wPlace = false;
+	var isDragging = false;
+	var dragDist = 0;
+	var startingPos = [];
+	var clickDown=false;
+	var valid = false;
+	var paused = false;
+	
+	var wellView = false;
+	var turretView = false;
+	var resourceView = false;
+	var infoView = false;
+	
+	
+
+    document.addEventListener("mousemove", msMv, false);
+    document.addEventListener("mousedown", msDn, false);
+    document.addEventListener("mouseup", msUp, false);
+    document.addEventListener("keydown", keyDn, false);
+    document.addEventListener("keyup", keyUp, false);
+	
+	function msDn(e) {
+		startingPos=[e.clientX-canvas.offsetLeft,e.clientY-canvas.offsetTop];
+		clickDown=true;
+		//if (dist(wells[0].x,wells[0].y,startingPos[0],startingPos[1])>=wellRadius) {}
+	}
+	function keyDn(e) {
+		var keyCode = e.which || e.keyCode;
+		switch (keyCode) {
+		case 16:
+			kShift=true;
+		break;
+		}
+		
+	}
+	function keyUp(e) {
+		var keyCode = e.which || e.keyCode;
+		switch (keyCode) {
+		case 16:
+			kShift=false;
+		break;
+		case 84:
+			tPlace=!tPlace;
+			wPlace=false;
+		break;
+		case 87:
+			wPlace=!wPlace;
+			//kShift=wPlace;
+			tPlace=false;
+		break;
+		case 32:
+			paused=!paused;
+		break;
+		}
+		
+	}
+	function msMv(e) {
+		if (clickDown) {
+			dragDist = dist(startingPos[0],startingPos[1],e.clientX,e.clientY);
+			if (dragDist>=10){
+				isDragging = true; //***********************
+			}
+			else {
+				isDragging = false;
+			}
+		}
+		currentPos = [e.clientX-canvas.offsetLeft,e.clientY-canvas.offsetTop]
+    }
+	function msUp(e) {
+		currentPos = [e.clientX-canvas.offsetLeft,e.clientY-canvas.offsetTop]
+		var cost = costEstimate();
+		if (money >= cost && nearDist>=elbowRoom) {
+			elbowRoom = minDistance;
+			if (tPlace) {
+				makeTurret(currentPos[0],currentPos[1],0,0,0,0);
+				money-=cost;
+				//tPlace=false;
+			}
+			else if (wPlace) {
+				makeWell(currentPos[0],currentPos[1]);
+				money-=cost;
+				//wPlace=false;
+			}
+			isDragging=false;
+			clickDown=false;
+			startingPos = [];
+			dragDist = 0;
+		}
+	}
+				
+	//function clickHandler(e) {
+	//	if (money>=turretCost) {
+	//		makeTurret(e.clientX -canvas.offsetLeft,e.clientY- canvas.offsetTop);
+	//		money-=turretCost;
+	//	}
+    //}
+	function wellPull(i) {
+		bugs[i].wPullx=0;
+		bugs[i].wPully=0;
+		var j=0;
+		var l = wells.length;
+		var firstJ = true;
+		var dst = 0;
+		if (wells[bugs[i].closestWell].status ==1) {
+		dst = dist(bugs[i].x,bugs[i].y,wells[bugs[i].closestWell].x,wells[bugs[i].closestWell].y);
+		bugs[i].closestWellDst=dst;
+		}
+		else {
+		bugs[i].closestWellDst=canvas.width*50;
+		}
+		for(j=0; j<l; j++) {
+			
+			if (wells[j].status ==1) {
+				dst = dist(bugs[i].x,bugs[i].y,wells[j].x,wells[j].y);
+				if (dst<bugs[i].closestWellDst*wellSeekAggro) {
+					bugs[i].closestWell=j
+					bugs[i].closestWellDst=dst
+				}
+				bugs[i].wPullx += (wellPullLinearMod)*(wells[j].x-bugs[i].x)/(dst)+(wells[j].x-bugs[i].x)/(dst*dst);
+				bugs[i].wPully += (wellPullLinearMod)*(wells[j].y-bugs[i].y)/(dst)+(wells[j].y-bugs[i].y)/(dst*dst);
+			}
+		}
+		bugs[i].wPullx *= 1+bugLiveCount/700;
+		bugs[i].wPully *= 1+bugLiveCount/700;
+	}
+	//function wellPully(i) {
+	//	var bPully=0;
+	//	var j=0;
+	//	var l = wells.length;
+	//	for(j=0; j<l; j++) {
+	//		var dst = dist(bugs[i].x,bugs[i].y,wells[j].x,wells[j].y);
+	//		bPully += (wellPullLinearMod)*(wells[j].y-bugs[i].y)/(dst)+(wells[j].y-bugs[i].y)/(dst*dst);
+	//		bPully *= 1+bugLiveCount/700;
+	//	}
+	//	return bPully;
+	//}
+	
+	//function deathPushx(i) {
+	//	var dPushx=0;
+	//	var j=0;
+	//	var l = bugs.length;
+	//	for(j=0; j<l; j++) {
+	//		if (bugs[j].status == 0 && i != j) {
+	//			var dst = dist(bugs[i].x,bugs[i].y,bugs[j].x,bugs[j].y);
+	//			dPushx -= (bugs[j].x-bugs[i].x)/(dst*dst);
+	//		}
+	//	}
+	//	return dPushx;
+	//}
+
+	function deathPush(i) {
+		bugs[i].dPushy=0;
+		bugs[i].dPushx=0;
+		var j=0;
+		var l = bugs.length;
+		for(j=0; j<l; j++) {
+			if (bugs[j].status == 0 && i != j) {
+				var dst = dist(bugs[i].x,bugs[i].y,bugs[j].x,bugs[j].y);
+				bugs[i].dPushx -= (bugs[j].x-bugs[i].x)/(dst*dst);
+				bugs[i].dPushy -= (bugs[j].y-bugs[i].y)/(dst*dst);
+			}
+		}
+	}
+	function turretPush(i) {
+		bugs[i].dPushy=0;
+		bugs[i].dPushx=0;
+		var j=0;
+		var l = turrets.length;
+		for(j=0; j<l; j++) {
+			//if (turrets[j].status == 1) {
+				var dst = dist(bugs[i].x,bugs[i].y,turrets[j].x,turrets[j].y);
+				if (dst <= 2*turrets[j].range) {
+					bugs[i].dPushx -= (turrets[j].x-bugs[i].x)/(dst*dst);
+					bugs[i].dPushy -= (turrets[j].y-bugs[i].y)/(dst*dst);
+				}
+			//}
+		}
+	}
+	
+	function circleOverlap(d,r1,r2) {
+		var r=Math.min(r1,r2);
+		var R=Math.max(r1,r2);
+		if (d<=R-r) {
+			return Math.PI*r*r;
+		}
+		else {
+			return 	r*r*Math.acos((d*d+r*r-R*R)/(2*d*r))
+					+R*R*Math.acos((d*d+R*R-r*r)/(2*d*R))
+					-0.5*Math.sqrt((-d+r+R)*(d+r-R)*(d-r+R)*(d+r+R));
+		}
+	}
+	
+	function makeWell(x,y) {
+		wells.push({x: x
+					, y: y
+					, health: wellHealth
+					, r:wellRadius
+					, status: 1
+					, output: 0});
+		var newW = wells[wells.length-1];
+		var j=0;
+		var l = oilFields.length;
+		for(j=0; j<l; j++) {
+			var d = dist(newW.x,newW.y,oilFields[j].x,oilFields[j].y);
+			if (d<=oilFields[j].r+newW.r) {
+				newW.output += Math.round(circleOverlap(d,newW.r,oilFields[j].r));
+			}
+		}
+		makePipe(x,y,nearBuildingX,nearBuildingY);
+	}
+	
+	function makePipe(x1,y1,x2,y2) {
+		pipes.push({x1: x1
+					, y1: y1
+					, x2: x2
+					, y2: y2});
+	}
+	
+
+	function bugGen() {
+		if (bugsOn) {
+			if (bugGenCount >= bugGenTimer && bugsOn) {
+				makeBug(Math.random()*canvas.width/10,Math.random()*canvas.height/10);
+				bugGenCount=0;
+			}
+			bugGenCount++;
+			bugGenTimer = Math.max(minBugGen,initBugGen-(Math.round(frameCounter/stepBugGen)))
+		}
+	}
+	
+	function makeBug(bugX,bugY) {
+		bugLiveCount++;
+		bugTotalCount++;
+		bugs.push({x: bugX
+				, y: bugY
+				, dx: Math.random()*bugSpeed
+				, dy: Math.random()*bugSpeed
+				, dPushx: 0
+				, dPushy: 0
+				, status: 1
+				, shotAt: 0
+				, pStep: frameCounter%pathCalcStep
+				, closestWell: 0
+				, closestWellDst: 0});
+	}
+	
+	function makeTurret(turX,turY,railAX,railAY,railBX,railBY) {
+		turretCount++;
+		turrets.push({x: turX
+					, y: turY
+					, dx: 0
+					, dy: 0
+					, AX: railAX
+					, AY: railAY
+					, BX: railBX
+					, BY: railBY
+					, optX: 0
+					, optY: 0
+					, range: turretRange
+					, reloadCounter: turretReloadTime
+					, reloadTime: turretReloadTime
+					});
+					
+		makePipe(turX,turY,nearBuildingX,nearBuildingY);
+	}
+	
+	function killBug(bNo,status) {
+		bugs[bNo].status = status;
+		bugs[bNo].dx = 0;
+		bugs[bNo].dy = 0;
+		bugLiveCount--;
+		//wellPullParam+=2;
+	}
+	
+	function killBullet(bNo) {
+		bullets[bNo].status = 0;
+		bullets[bNo].dx = 0;
+		bullets[bNo].dy = 0;
+		bulletCount--;
+	}
+	function killWell(wNo) {
+		wells[wNo].status = 0;
+	}
+		
+	function dist(ax,ay,bx,by) {
+	return Math.sqrt((ax-bx)*(ax-bx) + (ay-by)*(ay-by));
+	}
+	
+    function bugBulletCD() {
+		minLiveBullet=0;
+		var i=0;
+		var j=0;
+		var bugL =bugs.length;
+		var bltL =bullets.length;
+        for(i=0; i<bltL; i++) {
+			if (bullets[i].status ==1) {
+				if (minLiveBullet==0) {minLiveBullet=i;}
+				for(j=0; j<bugL; j++) {
+					if (bugs[j].status ==1) {
+						if(bullets[i].x+2*bulletRadius > bugs[j].x
+						&& bullets[i].x < bugs[j].x+2*bugRadius
+						&& bullets[i].y+2*bulletRadius > bugs[j].y
+						&& bullets[i].y < bugs[j].y+2*bugRadius) {
+							killBug(j,0);
+							killBullet(i);
+							//score++;
+							//money++;
+							break;
+							//if(score == maxScore) {
+							//	alert("YOU WIN, CONGRATS!");
+							//	document.location.reload();
+							//}
+						}
+					}	
+				}
+			}
+        }
+    }
+    function bugwellCD() {
+		var i=0;
+		var l =wells.length;
+        for(i=0; i<l; i++) {
+			if (wells[i].status ==1) {
+				var j=0;
+				var bugL = bugs.length;
+				for(j=0; j<bugL; j++) {
+					if (bugs[j].status ==1) {
+						if(wells[i].x+wellWidth > bugs[j].x
+						&& wells[i].y+wellWidth > bugs[j].y
+						&& wells[i].x < bugs[j].x+2*bugRadius
+						&& wells[i].y < bugs[j].y+2*bugRadius) {
+							killBug(j,2);
+							wells[i].health--;
+							if(wells[i].health == 0) {
+								wells[i].status =0;
+							}
+						}
+					}	
+				}
+			}
+        }
+    }
+	
+	function bugsInRadius(x,y,r) {
+		var count = 0;
+		var j=0;
+		var l =bugs.length;
+		for(j=0; j<l; j++) {
+			if (bugs[j].status == 1)	{
+				if (r >= dist(x,y,bugs[j].x,bugs[j].y)) {
+				count++;
+				}
+			}	
+		}
+		return count;
+	}
+	
+    function posTurrets() {
+		var i=0;
+		var l = turretCount;
+        for(i=0; i<l; i++) {
+			var t = turrets[i];
+            if (t.AX > 0 && t.dx == 0 && t.dy == 0) { // if rail exists and turret is not already moving
+				var railLen = dist(t.AX,t.AY,t.BX,t.BY);
+				var maxBugs = 0;                                                                                    
+				var optP = [];                                                                                      
+				var pXY = [];                                                                                       
+				var pMax = Math.max(Math.round(railLen/turretGranularity),1);
+				var pBugs = 0;    
+				var p =0;
+				for(p=0; p < pMax; p++) {
+					pXY[0] = t.AX + p * (t.BX - t.AX)/pMax;                                                         
+					pXY[1] = t.AY + p * (t.BY - t.AY)/pMax;
+					pBugs = bugsInRadius(pXY[0], pXY[1], t.range)
+					if (pBugs > maxBugs) {                                          
+						optP[0] = pXY[0];
+						optP[1] = pXY[1];
+						maxBugs=pBugs;                                              
+					}
+				}
+				if (maxBugs > turretSeekAggro*bugsInRadius(t.x, t.y, t.range)) {
+					//alert("move:"+maxBugs+","+optP[0]+","+optP[1]);
+					t.optX = optP[0];
+					t.optY = optP[1];
+					t.dx = t.optX - t.x;
+					t.dy = t.optY - t.y;
+					if (t.dx != 0 || t.dy != 0) {
+						var mag = dist(0,0,t.dx,t.dy);
+						t.dx *= turretSpeed/mag;
+						t.dy *= turretSpeed/mag;
+					}
+				}
+			}
+        }
+    }
+	
+	function randomOil() {
+		var i = 0;
+		var j = 0;
+		for(i=0; i<oilFieldsCount; i++) {
+			
+			var oilX = Math.random()*canvas.width;
+			var oilY = Math.random()*canvas.height;
+			if (Math.random() > 0.1 && i>=1) {
+			var theta = Math.random()*6.28;
+			var r = oilFieldRadius+Math.random()*oilClusterFactor;
+			oilX = oilFields[i-1].x+r*Math.cos(theta);
+			oilY = oilFields[i-1].y+r*Math.sin(theta);;
+			}
+
+			oilFields.push({x: oilX, y: oilY, r: oilFieldRadius});
+			//console.log(oilFields[i].x+","+oilFields[i].y+","+oilFields[i].r);
+		}
+	}
+	function drawOil() {
+		var i = 0;
+		var l = oilFields.length;
+		for(i=0; i<l; i++) {
+			ctx.beginPath();
+			ctx.arc(oilFields[i].x, oilFields[i].y, oilFields[i].r, 0, Math.PI*2);
+			ctx.fillStyle = "rgba(50,50,50,.1)";
+			ctx.fill();
+			ctx.closePath();
+			//alert(i+"/"+l+" wells");
+		}
+	}
+	
+	function randomTerrain () {
+		var rando = 0;
+		var up = 1;
+		terrainX = (canvas.width/terrainRes)+1;
+		terrainY = (canvas.height/terrainRes)+1;
+        for(x=0; x<terrainX; x++) {
+			terrain[x]=[];
+			for(y=0; y<terrainY; y++) {
+				terrain[x][y] = 1;
+			}
+        }
+        for(y=1; y<terrainY; y++) {
+			for(x=1; x<terrainX; x++) {
+				up = Math.sign(terrain[x][y-1] - terrain[x-1][y-1]);//+ Math.sign(terrain[x-1][y] - terrain[x-2][y]);
+				rando = up*(Math.random()-trendStrength);
+				terrain[x][y] = Math.max(0,(terrain[x-1][y]+terrain[x-1][y-1]+terrain[x-1][y]+terrain[x-1][y+1])/4+rando);
+				if (terrain[x][y]>maxE) {
+					maxE = terrain[x][y];
+				}
+			}
+        }
+	}
+	function drawTerrain () {
+		var r = 0;
+		var g = 0;
+        for(y=0; y<terrainY; y++) {
+			for(x=0; x<terrainX; x++) {
+				r=Math.min(256,Math.round(512*(terrain[x][y]/maxE)));
+				g=Math.min(256,Math.round(512*(1-(terrain[x][y]/maxE))));
+				//ctx.beginPath();
+				//ctx.rect(x*terrainRes, y*terrainRes, terrainRes, terrainRes);
+				////ctx.fillStyle = "rgba("+r+","+g+",150,0)";
+				//ctx.fillStyle = "rgba(151,183,64,0)";
+				//ctx.fill();
+				//ctx.closePath();
+				ctx.font = "10px Arial";
+				ctx.fillStyle = "rgba("+r+","+g+",0,1)";
+				ctx.fillText("x", x*terrainRes, y*terrainRes);
+			}
+        }
+	
+    //ctx.fillStyle = "#F9A520";
+    //ctx.moveTo(0, 0); // start at top left corner of canvas
+    //ctx.lineTo(200, 0); // go 200px to right (x), straight line from 0 to 0
+    //ctx.lineTo(100, 200); // go to horizontal 100 (x) and vertical 200 (y)
+    //ctx.fill(); // connect and fill
+	}
+	
+    function turretFire() {
+		var range = 0;
+		var i=0;
+		var turL =turrets.length;
+        for(i=0; i<turL; i++) {
+            if (turrets[i].reloadCounter < turrets[i].reloadTime) {
+			turrets[i].reloadCounter++;
+			}
+			else {
+				var j = 0;
+				var bugL = bugs.length;
+				for(j=0; j<bugL; j++) {
+					if (bugs[j].status == 1 && bugs[j].shotAt <= 0)	{
+						range = dist(turrets[i].x,turrets[i].y,bugs[j].x,bugs[j].y)
+						if (range <= turrets[i].range) {
+						fireBullet(i,j,bulletSpeed);
+						turrets[i].reloadCounter=0;
+						break;
+						}
+					}	
+				}
+			}
+        }
+    }
+	
+	function fireBullet(i,j,speed) {//takes turret #i and bug #j, calculates a bullet trajectory to kill bug, and fires
+		var jx = bugs[j].x;		
+		var jy = bugs[j].y;
+		var t =0;
+		var n=0;
+		for(n=0; n<fireLoops; n++) {
+            t=dist(turrets[i].x,turrets[i].y,jx,jy)/speed
+			jx=bugs[j].x+t*bugs[j].dx;
+			jy=bugs[j].y+t*bugs[j].dy;
+        }
+		var idx = jx-turrets[i].x;
+		var idy = jy-turrets[i].y;
+		var mag = dist(0,0,idx,idy);
+		idx *= speed/mag;
+		idy *= speed/mag;
+			
+		bulletCount++;
+		bullets.push({x: turrets[i].x, y: turrets[i].y, dx: idx, dy: idy, status:1});
+		bugs[j].shotAt = t+1;
+	}
+		
+    function drawTurrets() {
+		var i=0;
+		var l =turrets.length;
+        if (tPlace||kShift) {
+			for(i=0; i<l; i++) {
+				ctx.beginPath();
+				ctx.arc(turrets[i].x, turrets[i].y, turrets[i].range, 0, Math.PI*2);
+				ctx.strokeStyle = "rgba(200,0,0,.25)";
+				ctx.stroke();
+			}
+		}
+        for(i=0; i<l; i++) {
+			ctx.beginPath();
+			ctx.rect(turrets[i].x-0.5*turretWidth, turrets[i].y-0.5*turretWidth, turretWidth, turretWidth);
+			ctx.fillStyle = "#454545";
+			ctx.fill();
+			ctx.closePath();
+			
+			ctx.beginPath();
+			ctx.moveTo(turrets[i].AX,turrets[i].AY);
+			ctx.lineTo(turrets[i].BX,turrets[i].BY);
+			ctx.linewidth = railWidth;
+			ctx.strokeStyle = "#454545";
+			ctx.stroke();
+			
+			ctx.font = "16px Arial";
+			ctx.fillStyle = "#0095DD";
+			ctx.fillText(turrets[i].reloadCounter, turrets[i].x, turrets[i].y);
+			
+        }
+		if (tPlace) {
+			drawTurretProspect();
+		}
+    }
+    function drawTurretProspect() {
+		var color = "#FF0000";
+		var cost = costEstimate();
+		if (money>=cost && nearDist>=elbowRoom) {
+			color = "#00FF00";
+		}
+	
+		ctx.beginPath();
+		ctx.arc(currentPos[0],currentPos[1], turretRange, 0, Math.PI*2);
+		ctx.strokeStyle = color;
+		ctx.stroke();
+		ctx.beginPath();
+		ctx.rect(currentPos[0]-0.5*turretWidth, currentPos[1]-0.5*turretWidth, turretWidth, turretWidth);
+		ctx.fillStyle = color;
+		ctx.fill();
+		ctx.closePath();
+		
+		ctx.beginPath();
+		ctx.moveTo(currentPos[0],currentPos[1]);
+		ctx.lineTo(nearBuildingX, nearBuildingY);
+		ctx.strokeStyle = color;
+		ctx.stroke();
+		
+		ctx.font = "16px Arial";
+		ctx.fillStyle = color;
+		ctx.fillText("\u{20B3}"+Math.ceil(cost),currentPos[0]+15,currentPos[1]+5);
+	}
+	
+	function drawWellProspect() {
+		var color = "#FF0000";
+		var cost = costEstimate();
+		if (money>=cost && nearDist>=elbowRoom) {
+			color = "#00FF00";
+		}
+		ctx.beginPath();
+		ctx.rect(currentPos[0]-wellWidth/2,currentPos[1]-wellWidth/2, wellWidth, wellWidth);
+		ctx.fillStyle = color;
+		ctx.fill();
+		ctx.closePath();
+		
+		ctx.beginPath();
+		ctx.arc(currentPos[0],currentPos[1], wellRadius, 0, Math.PI*2);
+		ctx.strokeStyle = color;
+		ctx.stroke();
+		
+		ctx.beginPath();
+		ctx.moveTo(currentPos[0],currentPos[1]);
+		ctx.lineTo(nearBuildingX, nearBuildingY);
+		ctx.strokeStyle = color;
+		ctx.stroke();
+		
+		ctx.font = "16px Arial";
+		ctx.fillStyle = color;
+		ctx.fillText("\u{20B3}"+Math.ceil(cost),currentPos[0]+30,currentPos[1]+5);
+		
+	}
+	
+	function costEstimate() {
+		var buildingCost =0;
+		if (wPlace) {buildingCost = wellCost;}
+		if (tPlace) {buildingCost = turretCost;}
+		findNearBuilding();
+		var railEstimate = nearDist * pipeCost;
+		return railEstimate + buildingCost;
+	}
+	
+	function findNearBuilding() {
+		
+		var i=0;
+		var x = currentPos[0];
+		var y = currentPos[1];
+		nearBuildingX = currentPos[0];
+		nearBuildingY = currentPos[1];
+		nearDist = 0;
+		
+		var l =wells.length;
+		if (l>0) {
+			nearBuildingX = wells[0].x;
+			nearBuildingY = wells[0].y;
+			nearDist = dist(x,y,wells[0].x,wells[0].y);
+			for(i=1; i<l; i++) {
+				if (wells[i].status ==1 && dist(x,y,wells[i].x,wells[i].y)<nearDist) {
+					nearBuildingX = wells[i].x;
+					nearBuildingY = wells[i].y;
+					nearDist = dist(x,y,wells[i].x,wells[i].y);
+					
+				}
+			}
+			l =turrets.length;
+			for(i=0; i<l; i++) {
+				if (dist(x,y,turrets[i].x,turrets[i].y)<nearDist) {
+					nearBuildingX = turrets[i].x;
+					nearBuildingY = turrets[i].y;
+					nearDist = dist(x,y,turrets[i].x,turrets[i].y);
+					
+				}
+			}
+		}
+		
+	}
+		
+    function drawWells() {
+		var i=0;
+	
+		var l =wells.length;
+        for(i=0; i<l; i++) {
+			if (wells[i].status ==1) {
+				ctx.beginPath();
+				ctx.rect(wells[i].x-wellWidth/2, wells[i].y-wellWidth/2, wellWidth, wellWidth);
+				ctx.fillStyle = "#454545";
+				ctx.fill();
+				ctx.closePath();
+				ctx.font = "16px Arial";
+				ctx.fillStyle = "#0095DD";
+				ctx.fillText(wells[i].health+","+wells[i].output, wells[i].x, wells[i].y);
+				ctx.beginPath();
+				ctx.arc(wells[i].x, wells[i].y, wells[i].r, 0, Math.PI*2);
+				ctx.strokeStyle = "#DDDDDD";
+				ctx.stroke();
+			}
+		}
+		if (wPlace) {
+			drawWellProspect();
+			//ctx.beginPath();
+			//ctx.rect(currentPos[0],currentPos[1], wellWidth, wellWidth);
+			//ctx.fillStyle = "#999999";
+			//ctx.fill();
+			//ctx.closePath();
+			//ctx.beginPath();
+			//ctx.arc(currentPos[0],currentPos[1], wellRadius, 0, Math.PI*2);
+			//ctx.strokeStyle = "#999999";
+			//ctx.stroke();
+		}
+    }
+	
+	function drawPipes() {
+		var i=0;
+		var l =pipes.length;
+        for(i=0; i<l; i++) {
+			ctx.beginPath();
+			ctx.moveTo(pipes[i].x1,pipes[i].y1);
+			ctx.lineTo(pipes[i].x2,pipes[i].y2);
+			ctx.strokeStyle = "#999999";
+			ctx.stroke();
+		}
+	}
+	
+    function drawScore() {
+        ctx.font = "16px Arial";
+        ctx.fillStyle = "#000000";
+        ctx.fillText("Score: "+score, 8, 20);
+        ctx.fillText("Wells: "+wells.length, 8, 40);
+        ctx.fillText("Money: \u{20B3}"+Math.round(money), 8, 60);
+		ctx.fillText(Math.round(10000/(timr[9]-timr[0])) +"fps", 8, 80);
+        //ctx.fillText(minLiveBug, 8, 100);
+        ctx.fillText("Press SPACEBAR to pause", canvas.width-220, 20);
+        ctx.fillText("Press T to place a turret", canvas.width-220, 40);
+        ctx.fillText("Press W to drill a well", canvas.width-220, 60);
+        ctx.fillText("Hold SHIFT to view resources", canvas.width-220, 80);
+    }
+	
+    function drawBugs() {
+		var i=0;
+		var l =bugs.length;
+        for(i=0; i<l; i++) {
+			if (bugs[i].status ==1) {
+				ctx.beginPath();
+				ctx.arc(bugs[i].x, bugs[i].y, bugRadius, 0, Math.PI*2);
+				ctx.fillStyle = "#0095DD";
+				ctx.fill();
+				ctx.closePath();
+				
+				
+				//ctx.beginPath();
+				//ctx.moveTo(bugs[i].x, bugs[i].y);
+				//ctx.lineTo(wells[bugs[i].closestWell].x,wells[bugs[i].closestWell].y);
+				//ctx.strokeStyle = "#DDDDDD";
+				//ctx.stroke();
+				//ctx.font = "10px Arial";
+				//ctx.fillStyle = "#0095DD";
+				//ctx.fillText(bugs[i].status, bugs[i].x+5, bugs[i].y);
+			}
+        }
+    }
+	
+    function drawBullets() {
+		var i=0;
+		var l =bullets.length;
+        for(i=0; i<l; i++) {
+			if (bullets[i].status ==1) {
+				ctx.beginPath();
+				ctx.arc(bullets[i].x, bullets[i].y, bulletRadius, 0, Math.PI*2);
+				ctx.fillStyle = "#000000";
+				ctx.fill();
+				ctx.closePath();
+			}
+        }
+    }	
+    function bugCrawl() {
+		minLiveBug = 0;
+		var i=0;
+		var l = bugs.length;
+        for(i=0; i<l; i++) {
+			if (bugs[i].status ==1) {
+				if (minLiveBug==0) {minLiveBug=i;}
+				bugs[i].x += bugs[i].dx;
+				bugs[i].y += bugs[i].dy;
+				
+				if (bugs[i].pStep == frameCounter%pathCalcStep) {
+					deathPush(i);
+					//turretPush(i);
+					wellPull(i);
+					var pullMod = Math.max(1,ovr1Range/bugs[i].closestWellDst);
+					var magPush = dist(0,0,bugs[i].dPushx,bugs[i].dPushy);
+					var magPull = dist(0,0,bugs[i].wPullx,bugs[i].wPully);
+					//alert(bugs[i].closestWell);
+					if (magPush>0) {
+						if (magPull/magPush <= minPullPushRatio) {pullMod *= minPullPushRatio * magPush/magPull;}
+						bugs[i].wPullx *= pullMod;
+						bugs[i].wPully *= pullMod;
+					}
+					bugs[i].dx = bugs[i].dPushx + bugs[i].wPullx;
+					bugs[i].dy = bugs[i].dPushy + bugs[i].wPully;
+					//bugs[i].dx = bugs[i].dPushx * deathPushParam + bugs[i].wPullx * wellPullParam;
+					//bugs[i].dy = bugs[i].dPushy * deathPushParam + bugs[i].wPully * wellPullParam;
+					var mag = dist(0,0,bugs[i].dx,bugs[i].dy);
+					if (mag > 0){
+						bugs[i].dx*=(bugSpeed/mag);
+						bugs[i].dy*=(bugSpeed/mag);
+					}
+				}
+				
+				if (bugs[i].shotAt>0) {bugs[i].shotAt-=1};	//decrement shotAt so if bullet has not hit within expected # of frames, a new bullet can be fired  //bugs[i].shotAt=Math.max(bugs[i].shotAt-1,0);
+				
+			}
+        }
+    }
+	function bugBulletCleanup() {
+		bugs.splice(0,Math.max(0,minLiveBug-(deadBugBuffer-(bugs.length-minLiveBug-bugLiveCount))));
+		//console.log(bugGenTimer);
+		bullets.splice(0,Math.max(0,minLiveBullet-7));
+	}
+    function turretSlide() {
+		var i =0;
+		var l = turrets.length;
+        for(i=0; i<l; i++) {
+			var t = turrets[i];
+			if (t.dx!=0 || t.dy!=0) { // if turret moving
+				if (dist(t.optX,t.optY,t.x,t.y) < turretSpeed) { //if turret will reach/pass destination on next frame
+					t.x = t.optX;	//put turret in destination
+					t.y = t.optY;
+					t.dx = 0;
+					t.dy = 0;
+				}
+				else {
+					t.x += t.dx;
+					t.y += t.dy;
+				}
+			}
+        }
+    }
+    function bulletFly() {
+		var i =0;
+		var l = bullets.length;
+        for(i=0; i<l; i++) {
+			if (bullets[i].status == 1){
+				bullets[i].x+=bullets[i].dx;
+				bullets[i].y+=bullets[i].dy;
+				if(bullets[i].x + bullets[i].dx > canvas.width - bulletRadius
+				|| bullets[i].x + bullets[i].dx < bulletRadius
+				|| bullets[i].y + bullets[i].dy < bulletRadius
+				|| bullets[i].y + bullets[i].dy > canvas.height - bulletRadius) {
+					killBullet(i);
+				}
+			}
+        }
+	}
+	function counters() {
+		timr.push(Date.now());
+		timr.shift();
+		frameCounter++;
+		var j=0;
+		var l = wells.length;
+		if (l >= 1) {
+			bugsOn=true;
+		}
+		var totalHealth = 0;
+		for(j=0; j<l; j++) {
+			var w = wells[j];
+			if (w.status==1) {
+				money+=w.output*oilPrice;
+				totalHealth+=Math.max(0,w.health)
+			}
+		}
+		if (l>0 && totalHealth == 0) {
+			alert("YOU LOSE. YOU WERE OUTSMARTED BY "+ bugs.length +" BUGS.");
+			initialize();
+		}
+	}
+	function initialize() {
+		score = 0;
+		bugs = [];
+		minLiveBug = 0;
+		bugTotalCount = 0;
+		bugLiveCount = 0;
+		bugGenCount = 100;
+		bugGenTimer = 0;
+		bugsOn = false;
+		bullets = [];
+		bulletCount = 0;
+		wells = [];
+		turrets = [];
+		turretCount = 0;
+		frameCounter = 0;
+		timr = [0,0,0,0,0,0,0,0,0,0];
+		money = 2400;
+		oil = 0;
+		proposedCost = 0;
+		currentPos = [];
+		minLiveBullet = 0;
+		kShift = false;
+		tPlace = false;
+		wPlace = true;
+		isDragging = false;
+		dragDist = 0;
+		startingPos = [];
+		clickDown=false;
+		valid = false;
+		paused = false;
+	}
+	//function roundRect(x, y, width, height, radius, fill, stroke) {
+	//	if (typeof stroke == "undefined" ) {
+	//		stroke = true;
+	//	}
+	//	if (typeof radius === "undefined") {
+	//		radius = 5;
+	//	}
+	//	ctx.beginPath();
+	//	ctx.moveTo(x + radius, y);
+	//	ctx.lineTo(x + width - radius, y);
+	//	ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+	//	ctx.lineTo(x + width, y + height - radius);
+	//	ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+	//	ctx.lineTo(x + radius, y + height);
+	//	ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+	//	ctx.lineTo(x, y + radius);
+	//	ctx.quadraticCurveTo(x, y, x + radius, y);
+	//	ctx.closePath();
+	//	if (stroke) {
+	//		ctx.stroke();
+	//	}
+	//	if (fill) {
+	//		ctx.fill();
+	//	}        
+	//}
+	//
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+		//drawTerrain();
+		//if (wPlace||kShift) {drawOil();}
+		drawOil();
+		drawPipes();
+		drawTurrets();
+		drawWells();
+		drawBugs();
+        drawBullets();
+        drawScore();
+		if (!paused) {
+			bugGen();
+			
+			bugCrawl();
+			posTurrets();
+			turretSlide();
+			turretFire();
+			bulletFly();
+			
+			bugBulletCD();
+			bugwellCD();
+			
+			bugBulletCleanup();
+			counters();
+		} else {
+			ctx.font = "100px Arial";
+			ctx.fillStyle = "#0095DD";
+			ctx.fillText("\u{23F8}", canvas.width/2, canvas.height/2);
+		}
+        requestAnimationFrame(draw);
+    }
+	
+    randomOil();
+	//randomTerrain();
+	initialize();
+	draw();
+</script>
+
+</body>
+</html>
